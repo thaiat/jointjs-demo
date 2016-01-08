@@ -6,16 +6,87 @@ var _ = require('lodash');
 require('backbone');
 var joint = window.joint = require('jointjs');
 require('jointjs/dist/joint.shapes.devs');
+require('whatwg-fetch');
 
+var url = require('url');
+
+var serverHost = 'localhost:3000';
+
+// global.Promise = require('bluebird');
+// var request = Promise.promisifyAll(require('request'));
+
+var getComponentList = function() {
+    return fetch(url.format({
+            protocol: 'http',
+            host: serverHost,
+            pathname: 'api/Components'
+        }), {
+            method: 'GET',
+            body: null,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(function(res) {
+            return res.json();
+        });
+};
+var getGraph = function(id) {
+    return fetch(url.format({
+            protocol: 'http',
+            host: serverHost,
+            pathname: 'api/Graphs/' + id
+        }), {
+            method: 'GET',
+            body: null,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(function(res) {
+            return res.json();
+        });
+};
 
 var graph = new joint.dia.Graph;
 var paper = new joint.dia.Paper({
     el: $('#paper'),
-    width: 650,
-    height: 800,
+    width: window.innerWidth,
+    height: window.innerHeight,
     gridSize: 1,
-    model: graph
+    model: graph,
+    snapLinks: true,
+    linkPinning: false,
+    embeddingMode: true,
+    validateEmbedding: function(childView, parentView) {
+        return parentView.model instanceof joint.shapes.devs.Coupled;
+    },
+    validateConnection: function(sourceView, sourceMagnet, targetView, targetMagnet) {
+        return sourceMagnet != targetMagnet;
+    }
 });
+
+var connect = function(source, sourcePort, target, targetPort) {
+    var link = new joint.shapes.devs.Link({
+        source: {
+            id: source.id,
+            selector: source.getPortSelector(sourcePort)
+        },
+        target: {
+            id: target.id,
+            selector: target.getPortSelector(targetPort)
+        }
+    });
+    link.addTo(graph).reparent();
+};
+
+// var paper = new joint.dia.Paper({
+//     el: $('#paper'),
+//     width: 650,
+//     height: 800,
+//     gridSize: 1,
+//     model: graph
+// });
 
 
 var link = new joint.dia.Link({
@@ -183,3 +254,24 @@ link5.attr({
 });
 
 graph.addCell(link).addCell(link2).addCell(link3).addCell(link4).addCell(link5);
+getComponentList()
+    .then(function function_name(componentList) {
+        window.Components = componentList;
+        console.table(window.Components);
+        _.each(window.Components, function(component) {
+            component.shape = new joint.shapes.devs.Atomic({
+                position: {
+                    x: 650,
+                    y: 150
+                },
+                size: {
+                    width: 200,
+                    height: 200
+                },
+                inPorts: _.keys(component.instance.inPorts.ports),
+                outPorts: _.keys(component.instance.outPorts.ports),
+                attrs: { text: { text: component.id } }
+            });
+            graph.addCell(component.shape);
+        })
+    });
