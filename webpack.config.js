@@ -21,6 +21,9 @@ module.exports = {
         }, {
             test: /\.jpg$/,
             loader: "file-loader"
+        }, {
+            test: /\.json$/,
+            loader: "json-loader"
         }]
     },
     devtool: 'eval-source-map',
