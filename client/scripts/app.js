@@ -1,19 +1,13 @@
 'use strict';
-require('jointjs/dist/joint.css');
 require('../styles/main.css');
-window.$ = require('jquery');
 var _ = require('lodash');
-require('backbone');
-var joint = window.joint = require('jointjs');
-require('jointjs/dist/joint.shapes.devs');
-
+global.Promise = require('bluebird');
+var go = require('gojs/release/go-debug');
 var url = require('url');
 
 var serverHost = 'localhost:3000';
 
-global.Promise = require('bluebird');
 require('whatwg-fetch');
-// var request = Promise.promisifyAll(require('request'));
 
 var getComponentList = function() {
     return fetch(url.format({
@@ -64,192 +58,185 @@ var getComponent = function(id) {
         });
 };
 
-var defaultSize = {
-    width: 150,
-    height: 150
-};
-
-var graph = new joint.dia.Graph;
-var paper = new joint.dia.Paper({
-    el: $('#paper'),
-    width: window.innerWidth,
-    height: window.innerHeight,
-    gridSize: 1,
-    model: graph,
-    snapLinks: true,
-    linkPinning: false,
-    embeddingMode: true,
-    validateEmbedding: function(childView, parentView) {
-        return parentView.model instanceof joint.shapes.devs.Coupled;
-    },
-    validateConnection: function(sourceView, sourceMagnet, targetView, targetMagnet) {
-        return sourceMagnet !== targetMagnet;
-    },
-    defaultLink: new joint.dia.Link({
-        attrs: {
-            '.marker-target': {
-                d: 'M 10 0 L 0 5 L 10 10 z'
-            }
-        }
+var $ = go.GraphObject.make;
+var myDiagram = $(go.Diagram, 'myDiagramDiv', {
+    initialContentAlignment: go.Spot.Left,
+    initialAutoScale: go.Diagram.UniformToFill,
+    layout: $(go.LayeredDigraphLayout, {
+        direction: 0
     }),
-    // Enable link snapping within 75px lookup radius
-    snapLinks: {
-        radius: 75
-    }
+    'undoManager.isEnabled': true // enable Ctrl-Z to undo and Ctrl-Y to redo
 });
 
 
+var makePort = function makePort(name, opts) {
+    var port = $(go.Shape, 'Rectangle', {
+        fill: 'gray',
+        stroke: null,
+        strokeWidth: 0,
+        desiredSize: new go.Size(8, 8),
+        portId: name, // declare this object to be a 'port'
+        toMaxLinks: 1, // don't allow more than one link into a port
+        cursor: 'pointer' // show a different cursor to indicate potential link point
+    });
+    var lab = $(go.TextBlock, name, // the name of the port
+        {
+            font: '7pt sans-serif'
+        });
+    var panel = $(go.Panel, 'Horizontal', {
+        margin: new go.Margin(2, 0)
+    });
+    if (opts.isInPort) {
+        port.toSpot = go.Spot.Left;
+        port.toLinkable = true;
+        lab.margin = new go.Margin(1, 0, 0, 1);
+        panel.alignment = go.Spot.TopLeft;
+        panel.add(port);
+        panel.add(lab);
+    } else {
+        port.fromSpot = go.Spot.Right;
+        port.fromLinkable = true;
+        lab.margin = new go.Margin(1, 1, 0, 0);
+        panel.alignment = go.Spot.TopRight;
+        panel.add(lab);
+        panel.add(port);
+    }
+    return panel;
+};
+var makeTemplate = function makeTemplate(component, background, inPorts, outPorts) {
+    var node = $(go.Node, 'Spot',
+                $(go.Panel, 'Auto', {
+                        width: 100,
+                        height: 120
+                    },
+                    $(go.Shape, 'Rectangle', {
+                        fill: background,
+                        stroke: null,
+                        strokeWidth: 0,
+                        spot1: go.Spot.TopLeft,
+                        spot2: go.Spot.BottomRight
+                    }),
+                    $(go.Panel, 'Table',
+                        $(go.TextBlock, {
+                                row: 0,
+                                margin: 3,
+                                editable: true,
+                                maxSize: new go.Size(80, 40),
+                                stroke: 'white',
+                                font: 'bold 11pt sans-serif'
+                            },
+                            new go.Binding('text', 'name').makeTwoWay()),
+                        $(go.TextBlock, component, {
+                            row: 1,
+                            margin: 3,
+                            maxSize: new go.Size(80, NaN),
+                            stroke: 'white',
+                            font: 'italic 9pt sans-serif'
+                        })
+                    )
+                ),
+                $(go.Panel, 'Vertical', {
+                        alignment: go.Spot.Left,
+                        alignmentFocus: new go.Spot(0, 0.5, -8, 0)
+                    },
+                    inPorts)
+                    ,
+                $(go.Panel, 'Vertical', {
+                        alignment: go.Spot.Right,
+                        alignmentFocus: new go.Spot(1, 0.5, 8, 0)
+                    },
+                    outPorts)
+            );
+            myDiagram.nodeTemplateMap.add(component, node);
+};
+var makeComponentTemplate = function makeComponentTemplate(component) {
+    return getComponent(component)
+        .then(function(instance) {
+            var inPorts = _.map(_.keys(instance.inPorts.ports), _.curryRight(makePort, true));
+            var outPorts = _.map(_.keys(instance.outPorts.ports), _.curryRight(makePort, false));
+            makeTemplate(component, "cornflowerblue", inPorts, outPorts);
+        });
+};
+
+// make template for data objects
+makeTemplate('Data', 'mediumpurple', [], [makePort('', false)]);
+
+myDiagram.linkTemplate = $(go.Link, {
+        routing: go.Link.Orthogonal,
+        corner: 5,
+        relinkableFrom: true,
+        relinkableTo: true
+    },
+    $(go.Shape, {
+        stroke: 'gray',
+        strokeWidth: 2
+    }),
+    $(go.Shape, {
+        stroke: 'gray',
+        fill: 'gray',
+        toArrow: 'Standard'
+    })
+);
+
 
 var nfGraph = {
-    graphQueues: [],
-    processQueue: [],
-    linkQueue: [],
-    dataQueue: []
+    // graphQueues: [],
+    // processQueue: [],
+    // linkQueue: [],
+    // dataQueue: []
+    componentsQueue: []
 };
 
-var setRanksAndConnect = function(connection, nfObj) {
-    nfObj = nfObj || nfGraph;
-    var source;
-    var sourcePort;
+var myModel = {
+    "class": "go.GraphLinksModel",
+    "nodeCategoryProperty": "type",
+    "linkFromPortIdProperty": "frompid",
+    "linkToPortIdProperty": "topid",
+    "nodeDataArray": [],
+    "linkDataArray": []
+};
 
-    // if we have a data connection, build the data entity and push it to dataQueue
+var mapProcessToNodeData = function(process, processName) {
+    nfGraph.componentsQueue.push(process.component);
+    myModel.nodeDataArray.push({
+        key: processName,
+        type: process.component,
+        name: processName
+    });
+};
+
+var mapConnectionToLinkData = function(connection) {
     if (connection.data) {
-        var dataIdx = nfObj.dataQueue.length;
-        var data = {
-            data: connection.data,
-            shape: new joint.shapes.devs.Atomic({
-                size: defaultSize,
-                outPorts: ['out'],
-                attrs: {
-                    rect: {
-                        fill: 'blue'
-                    },
-                    text: {
-                        text: connection.data.toString(),
-                        'font-style': 'italic'
-                    }
-                }
-            }),
-            rank: 0,
-            path: 'dataQueue[' + dataIdx + ']'
+        var dataKey = myModel.linkDataArray.length;
+        myModel.nodeDataArray.push({
+            key: dataKey,
+            type: 'Data',
+            name: connection.data
+        });
+        connection.src = {
+            process: dataKey
         };
-        nfObj.dataQueue.push(data)
-        source = nfObj.dataQueue[dataIdx];
-        sourcePort = 'out';
-    } else if (connection.src) {
-        source = nfObj.processes[connection.src.process];
-        sourcePort = connection.src.port;
-    } else {
-        console.warn('Connection has neither data nor src:');
-        console.dir(connection);
-        throw new Error('Connection has neither data nor src');
     }
-    var sourceShape = source.shape;
-    var target = nfObj.processes[connection.tgt.process];
-    var targetPort = connection.tgt.port;
-    var targetShape = target.shape;
-
-    if (_.isUndefined(source.rank)) { // if source doesn't have a rank, set it to 1, it's a process
-        source.rank = 1;
-    }
-    if (_.isUndefined(target.rank) || target.rank < source.rank + 1) {
-        target.rank = source.rank + 1;
-    };
-
-    var linkIdx = nfObj.linkQueue.length;
-    var link = {
-        isLink: true,
-        shape: new joint.shapes.devs.Link({
-            source: {
-                id: sourceShape.id,
-                selector: sourceShape.getPortSelector(sourcePort)
-            },
-            target: {
-                id: targetShape.id,
-                selector: targetShape.getPortSelector(targetPort)
-            }
-        }),
-        path: 'linkQueue[' + linkIdx + ']'
-    }
-    nfObj.linkQueue.push(link);
-
-    return connection;
+    myModel.linkDataArray.push({
+        from: connection.src.process,
+        frompid: connection.src.port,
+        to: connection.tgt.process,
+        topid: connection.tgt.port
+    });
 };
 
-var setPositionFromRank = function(ent, nfObj) {
-    nfObj = nfObj || nfGraph;
-    if (_.isString(ent)) { // convert paths to entities
-        ent = _.get(nfObj, ent);
-    }
-    while (nfObj.graphQueues.length < ent.rank + 1) {
-        nfObj.graphQueues.push([]);
-    }
-    var rankIdx = nfObj.graphQueues[ent.rank].length;
-    nfObj.graphQueues[ent.rank].push(ent.path);
-    var x = 50 + (ent.rank) * 250;
-    var y = 50 + (rankIdx) * 250;
-    ent.shape.position(x, y);
-    return ent;
-};
-
-var addToGraph = function(ent, nfObj, jjGraph) {
-    nfObj = nfObj || nfGraph;
-    if (_.isString(ent)) { // convert paths to entities
-        ent = _.get(nfObj, ent);
-    }
-    jjGraph = jjGraph || graph;
-    var retShape = ent.shape.addTo(jjGraph);
-    if (ent.isLink) {
-        retShape.reparent();
-    }
-    return retShape;
-};
 
 Promise.resolve('server/ShowContent3')
     .then(getGraph)
     .then(function function_name(myGraph) {
         _.assign(nfGraph, myGraph);
-        return _.map(nfGraph.processes, function(v, k) {
-            v.processName = k;
-            v.path = 'processes.' + k;
-            return v;
-        });
+        _.each(nfGraph.processes, mapProcessToNodeData);
+        _.each(nfGraph.connections, mapConnectionToLinkData);
+        return nfGraph.componentsQueue;
     })
-    .map(function(process) {
-        return getComponent(process.component)
-            .then(function(instance) {
-                process.instance = instance
-                process.shape = new joint.shapes.devs.Atomic({
-                    size: defaultSize,
-                    inPorts: _.keys(process.instance.inPorts.ports),
-                    outPorts: _.keys(process.instance.outPorts.ports),
-                    attrs: {
-                        text: {
-                            text: process.processName
-                        }
-                    }
-                });
-                nfGraph.processQueue.push(process.path);
-                nfGraph.processes[process.processName] = process;
-            })
-    })
+    .map(makeComponentTemplate)
     .then(function() {
-        return nfGraph.connections;
-    })
-    .map(function(cxn) {
-        return setRanksAndConnect(cxn)
-    })
-    .then(function() {
-        return nfGraph.dataQueue.concat(nfGraph.processQueue);
-    })
-    .map(function(ent) {
-        return setPositionFromRank(ent);
-    })
-    .then(function() {
-        return _.flatten(nfGraph.graphQueues).concat(nfGraph.linkQueue);
-    })
-    .map(function(ent) {
-        return addToGraph(ent);
+        myDiagram.model = go.Model.fromJson(myModel);
     })
     .catch(function(err) {
         if (err) {
