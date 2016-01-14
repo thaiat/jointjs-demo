@@ -6,13 +6,13 @@ var _ = require('lodash');
 require('backbone');
 var joint = window.joint = require('jointjs');
 require('jointjs/dist/joint.shapes.devs');
-require('whatwg-fetch');
 
 var url = require('url');
 
 var serverHost = 'localhost:3000';
 
-// global.Promise = require('bluebird');
+global.Promise = require('bluebird');
+require('whatwg-fetch');
 // var request = Promise.promisifyAll(require('request'));
 
 var getComponentList = function() {
@@ -35,7 +35,7 @@ var getGraph = function(id) {
     return fetch(url.format({
             protocol: 'http',
             host: serverHost,
-            pathname: 'api/Graphs/' + id
+            pathname: 'api/Graphs/' + encodeURIComponent(id)
         }), {
             method: 'GET',
             body: null,
@@ -46,6 +46,27 @@ var getGraph = function(id) {
         .then(function(res) {
             return res.json();
         });
+};
+var getComponent = function(id) {
+    return fetch(url.format({
+            protocol: 'http',
+            host: serverHost,
+            pathname: 'api/Components/' + encodeURIComponent(id)
+        }), {
+            method: 'GET',
+            body: null,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(function(res) {
+            return res.json();
+        });
+};
+
+var defaultSize = {
+    width: 150,
+    height: 150
 };
 
 var graph = new joint.dia.Graph;
@@ -62,216 +83,177 @@ var paper = new joint.dia.Paper({
         return parentView.model instanceof joint.shapes.devs.Coupled;
     },
     validateConnection: function(sourceView, sourceMagnet, targetView, targetMagnet) {
-        return sourceMagnet != targetMagnet;
+        return sourceMagnet !== targetMagnet;
+    },
+    defaultLink: new joint.dia.Link({
+        attrs: {
+            '.marker-target': {
+                d: 'M 10 0 L 0 5 L 10 10 z'
+            }
+        }
+    }),
+    // Enable link snapping within 75px lookup radius
+    snapLinks: {
+        radius: 75
     }
 });
 
-var connect = function(source, sourcePort, target, targetPort) {
-    var link = new joint.shapes.devs.Link({
-        source: {
-            id: source.id,
-            selector: source.getPortSelector(sourcePort)
-        },
-        target: {
-            id: target.id,
-            selector: target.getPortSelector(targetPort)
-        }
-    });
-    link.addTo(graph).reparent();
+
+
+var nfGraph = {
+    graphQueues: [],
+    processQueue: [],
+    linkQueue: [],
+    dataQueue: []
 };
 
-// var paper = new joint.dia.Paper({
-//     el: $('#paper'),
-//     width: 650,
-//     height: 800,
-//     gridSize: 1,
-//     model: graph
-// });
+var setRanksAndConnect = function(connection, nfObj) {
+    nfObj = nfObj || nfGraph;
+    var source;
+    var sourcePort;
 
-
-var link = new joint.dia.Link({
-    source: {
-        x: 10,
-        y: 20
-    },
-    target: {
-        x: 250,
-        y: 20
-    },
-    attrs: {}
-});
-
-link.attr({
-    '.connection': {
-        stroke: 'red'
-    },
-    '.marker-source': {
-        fill: 'red',
-        d: 'M 10 0 L 0 5 L 10 10 z'
-    },
-    '.marker-target': {
-        fill: 'yellow',
-        d: 'M 10 0 L 0 5 L 10 10 z'
+    // if we have a data connection, build the data entity and push it to dataQueue
+    if (connection.data) {
+        var dataIdx = nfObj.dataQueue.length;
+        var data = {
+            data: connection.data,
+            shape: new joint.shapes.devs.Atomic({
+                size: defaultSize,
+                outPorts: ['out'],
+                attrs: {
+                    rect: {
+                        fill: 'blue'
+                    },
+                    text: {
+                        text: connection.data.toString(),
+                        'font-style': 'italic'
+                    }
+                }
+            }),
+            rank: 0,
+            path: 'dataQueue[' + dataIdx + ']'
+        };
+        nfObj.dataQueue.push(data)
+        source = nfObj.dataQueue[dataIdx];
+        sourcePort = 'out';
+    } else if (connection.src) {
+        source = nfObj.processes[connection.src.process];
+        sourcePort = connection.src.port;
+    } else {
+        console.warn('Connection has neither data nor src:');
+        console.dir(connection);
+        throw new Error('Connection has neither data nor src');
     }
-});
+    var sourceShape = source.shape;
+    var target = nfObj.processes[connection.tgt.process];
+    var targetPort = connection.tgt.port;
+    var targetShape = target.shape;
 
-var link2 = new joint.dia.Link({
-    source: {
-        x: 10,
-        y: 60
-    },
-    target: {
-        x: 250,
-        y: 60
-    },
-    attrs: {}
-});
-
-link2.attr({
-    '.connection': {
-        stroke: '#E74C3C',
-        'stroke-width': 5
-    },
-    '.marker-source': {
-        stroke: '#E74C3C',
-        fill: '#E74C3C',
-        d: 'M 10 0 L 0 5 L 10 10 z'
-    },
-    '.marker-target': {
-        stroke: '#E74C3C',
-        fill: '#E74C3C',
-        d: 'M 10 0 L 0 5 L 10 10 z'
+    if (_.isUndefined(source.rank)) { // if source doesn't have a rank, set it to 1, it's a process
+        source.rank = 1;
     }
-});
+    if (_.isUndefined(target.rank) || target.rank < source.rank + 1) {
+        target.rank = source.rank + 1;
+    };
 
-var link3 = new joint.dia.Link({
-    source: {
-        x: 10,
-        y: 100
-    },
-    target: {
-        x: 250,
-        y: 100
-    },
-    attrs: {}
-});
-
-link3.attr({
-    '.connection': {
-        stroke: '#3498DB',
-        'stroke-width': 3,
-        'stroke-dasharray': '5 2'
-    },
-    '.marker-source': {
-        stroke: '#3498DB',
-        fill: '#3498DB',
-        d: 'M5.5,15.499,15.8,21.447,15.8,15.846,25.5,21.447,25.5,9.552,15.8,15.152,15.8,9.552z'
-    },
-    '.marker-target': {
-        stroke: '#3498DB',
-        fill: '#3498DB',
-        d: 'M4.834,4.834L4.833,4.833c-5.889,5.892-5.89,15.443,0.001,21.334s15.44,5.888,21.33-0.002c5.891-5.891,5.893-15.44,0.002-21.33C20.275-1.056,10.725-1.056,4.834,4.834zM25.459,5.542c0.833,0.836,1.523,1.757,2.104,2.726l-4.08,4.08c-0.418-1.062-1.053-2.06-1.912-2.918c-0.859-0.859-1.857-1.494-2.92-1.913l4.08-4.08C23.7,4.018,24.622,4.709,25.459,5.542zM10.139,20.862c-2.958-2.968-2.959-7.758-0.001-10.725c2.966-2.957,7.756-2.957,10.725,0c2.954,2.965,2.955,7.757-0.001,10.724C17.896,23.819,13.104,23.817,10.139,20.862zM5.542,25.459c-0.833-0.837-1.524-1.759-2.105-2.728l4.081-4.081c0.418,1.063,1.055,2.06,1.914,2.919c0.858,0.859,1.855,1.494,2.917,1.913l-4.081,4.081C7.299,26.982,6.379,26.292,5.542,25.459zM8.268,3.435l4.082,4.082C11.288,7.935,10.29,8.571,9.43,9.43c-0.858,0.859-1.494,1.855-1.912,2.918L3.436,8.267c0.58-0.969,1.271-1.89,2.105-2.727C6.377,4.707,7.299,4.016,8.268,3.435zM22.732,27.563l-4.082-4.082c1.062-0.418,2.061-1.053,2.919-1.912c0.859-0.859,1.495-1.857,1.913-2.92l4.082,4.082c-0.58,0.969-1.271,1.891-2.105,2.728C24.623,26.292,23.701,26.983,22.732,27.563z'
+    var linkIdx = nfObj.linkQueue.length;
+    var link = {
+        isLink: true,
+        shape: new joint.shapes.devs.Link({
+            source: {
+                id: sourceShape.id,
+                selector: sourceShape.getPortSelector(sourcePort)
+            },
+            target: {
+                id: targetShape.id,
+                selector: targetShape.getPortSelector(targetPort)
+            }
+        }),
+        path: 'linkQueue[' + linkIdx + ']'
     }
-});
+    nfObj.linkQueue.push(link);
 
-var link4 = new joint.dia.Link({
-    source: {
-        x: 300,
-        y: 20
-    },
-    target: {
-        x: 540,
-        y: 20
-    },
-    vertices: [{
-        x: 300,
-        y: 60
-    }, {
-        x: 400,
-        y: 60
-    }, {
-        x: 400,
-        y: 20
-    }],
-    attrs: {}
-});
+    return connection;
+};
 
-link4.attr({
-    '.connection': {
-        stroke: 'black',
-        'stroke-width': 2
-    },
-    '.marker-source': {
-        stroke: 'black',
-        fill: 'black',
-        d: 'M5.5,15.499,15.8,21.447,15.8,15.846,25.5,21.447,25.5,9.552,15.8,15.152,15.8,9.552z'
-    },
-    '.marker-target': {
-        stroke: 'black',
-        fill: 'black',
-        d: 'M5.5,15.499,15.8,21.447,15.8,15.846,25.5,21.447,25.5,9.552,15.8,15.152,15.8,9.552z'
+var setPositionFromRank = function(ent, nfObj) {
+    nfObj = nfObj || nfGraph;
+    if (_.isString(ent)) { // convert paths to entities
+        ent = _.get(nfObj, ent);
     }
-});
-
-var link5 = new joint.dia.Link({
-    source: {
-        x: 340,
-        y: 80
-    },
-    target: {
-        x: 540,
-        y: 80
-    },
-    vertices: [{
-        x: 300,
-        y: 120
-    }, {
-        x: 400,
-        y: 80
-    }, {
-        x: 400,
-        y: 120
-    }],
-    smooth: true,
-    attrs: {}
-});
-
-link5.attr({
-    '.connection': {
-        stroke: '#9B59B6',
-        'stroke-width': 2
-    },
-    '.marker-source': {
-        stroke: '#9B59B6',
-        fill: '#9B59B6',
-        d: 'M24.316,5.318,9.833,13.682,9.833,5.5,5.5,5.5,5.5,25.5,9.833,25.5,9.833,17.318,24.316,25.682z'
-    },
-    '.marker-target': {
-        stroke: '#F39C12',
-        fill: '#F39C12',
-        d: 'M14.615,4.928c0.487-0.986,1.284-0.986,1.771,0l2.249,4.554c0.486,0.986,1.775,1.923,2.864,2.081l5.024,0.73c1.089,0.158,1.335,0.916,0.547,1.684l-3.636,3.544c-0.788,0.769-1.28,2.283-1.095,3.368l0.859,5.004c0.186,1.085-0.459,1.553-1.433,1.041l-4.495-2.363c-0.974-0.512-2.567-0.512-3.541,0l-4.495,2.363c-0.974,0.512-1.618,0.044-1.432-1.041l0.858-5.004c0.186-1.085-0.307-2.6-1.094-3.368L3.93,13.977c-0.788-0.768-0.542-1.525,0.547-1.684l5.026-0.73c1.088-0.158,2.377-1.095,2.864-2.081L14.615,4.928z'
+    while (nfObj.graphQueues.length < ent.rank + 1) {
+        nfObj.graphQueues.push([]);
     }
-});
+    var rankIdx = nfObj.graphQueues[ent.rank].length;
+    nfObj.graphQueues[ent.rank].push(ent.path);
+    var x = 50 + (ent.rank) * 250;
+    var y = 50 + (rankIdx) * 250;
+    ent.shape.position(x, y);
+    return ent;
+};
 
-graph.addCell(link).addCell(link2).addCell(link3).addCell(link4).addCell(link5);
-getComponentList()
-    .then(function function_name(componentList) {
-        window.Components = componentList;
-        console.table(window.Components);
-        _.each(window.Components, function(component) {
-            component.shape = new joint.shapes.devs.Atomic({
-                position: {
-                    x: 650,
-                    y: 150
-                },
-                size: {
-                    width: 200,
-                    height: 200
-                },
-                inPorts: _.keys(component.instance.inPorts.ports),
-                outPorts: _.keys(component.instance.outPorts.ports),
-                attrs: { text: { text: component.id } }
-            });
-            graph.addCell(component.shape);
-        })
+var addToGraph = function(ent, nfObj, jjGraph) {
+    nfObj = nfObj || nfGraph;
+    if (_.isString(ent)) { // convert paths to entities
+        ent = _.get(nfObj, ent);
+    }
+    jjGraph = jjGraph || graph;
+    var retShape = ent.shape.addTo(jjGraph);
+    if (ent.isLink) {
+        retShape.reparent();
+    }
+    return retShape;
+};
+
+Promise.resolve('server/ShowContent3')
+    .then(getGraph)
+    .then(function function_name(myGraph) {
+        _.assign(nfGraph, myGraph);
+        return _.map(nfGraph.processes, function(v, k) {
+            v.processName = k;
+            v.path = 'processes.' + k;
+            return v;
+        });
+    })
+    .map(function(process) {
+        return getComponent(process.component)
+            .then(function(instance) {
+                process.instance = instance
+                process.shape = new joint.shapes.devs.Atomic({
+                    size: defaultSize,
+                    inPorts: _.keys(process.instance.inPorts.ports),
+                    outPorts: _.keys(process.instance.outPorts.ports),
+                    attrs: {
+                        text: {
+                            text: process.processName
+                        }
+                    }
+                });
+                nfGraph.processQueue.push(process.path);
+                nfGraph.processes[process.processName] = process;
+            })
+    })
+    .then(function() {
+        return nfGraph.connections;
+    })
+    .map(function(cxn) {
+        return setRanksAndConnect(cxn)
+    })
+    .then(function() {
+        return nfGraph.dataQueue.concat(nfGraph.processQueue);
+    })
+    .map(function(ent) {
+        return setPositionFromRank(ent);
+    })
+    .then(function() {
+        return _.flatten(nfGraph.graphQueues).concat(nfGraph.linkQueue);
+    })
+    .map(function(ent) {
+        return addToGraph(ent);
+    })
+    .catch(function(err) {
+        if (err) {
+            console.warn(err);
+            throw err;
+        }
     });
