@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!DOCTYPE html> <!-- HTML5 document type -->
 <html lang="en">
 
 <head>
@@ -6,8 +6,12 @@
     <title>{%= o.htmlWebpackPlugin.options.title %}</title>
 </head>
 
+
+<!-- The DIV for a Diagram needs an explicit size or else we will not see anything.
+     In this case we also add a background color so we can see that area. -->
 <body>
-    <div id="paper"></div>
+    <div id="myDiagramDiv"
+     style="background-color: whitesmoke; border: solid 1px black; width: 100%; height: 600px"></div>
 </body>
 
 </html>

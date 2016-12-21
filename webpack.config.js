@@ -26,14 +26,15 @@ module.exports = {
             loader: "json-loader"
         }]
     },
-    devtool: 'eval-source-map',
+    devtool: 'source-map',
     debug: true,
     entry: {
         'bundle': PATHS.app
     },
     output: {
         path: PATHS.build,
-        filename: 'bundle.js'
+        filename: 'bundle.js',
+        sourceMapFilename: 'bundle.js.map'
     },
     resolve: {
         root: [path.join(__dirname, "bower_components")]

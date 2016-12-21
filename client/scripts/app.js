@@ -1,19 +1,13 @@
 'use strict';
-require('jointjs/dist/joint.css');
 require('../styles/main.css');
-window.$ = require('jquery');
 var _ = require('lodash');
-require('backbone');
-var joint = window.joint = require('jointjs');
-require('jointjs/dist/joint.shapes.devs');
-require('whatwg-fetch');
-
+global.Promise = require('bluebird');
+var go = require('gojs/release/go-debug');
 var url = require('url');
 
 var serverHost = 'localhost:3000';
 
-// global.Promise = require('bluebird');
-// var request = Promise.promisifyAll(require('request'));
+require('whatwg-fetch');
 
 var getComponentList = function() {
     return fetch(url.format({
@@ -35,7 +29,23 @@ var getGraph = function(id) {
     return fetch(url.format({
             protocol: 'http',
             host: serverHost,
-            pathname: 'api/Graphs/' + id
+            pathname: 'api/Graphs/' + encodeURIComponent(id)
+        }), {
+            method: 'GET',
+            body: null,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(function(res) {
+            return res.json();
+        });
+};
+var getComponent = function(id) {
+    return fetch(url.format({
+            protocol: 'http',
+            host: serverHost,
+            pathname: 'api/Components/' + encodeURIComponent(id)
         }), {
             method: 'GET',
             body: null,
@@ -48,230 +58,189 @@ var getGraph = function(id) {
         });
 };
 
-var graph = new joint.dia.Graph;
-var paper = new joint.dia.Paper({
-    el: $('#paper'),
-    width: window.innerWidth,
-    height: window.innerHeight,
-    gridSize: 1,
-    model: graph,
-    snapLinks: true,
-    linkPinning: false,
-    embeddingMode: true,
-    validateEmbedding: function(childView, parentView) {
-        return parentView.model instanceof joint.shapes.devs.Coupled;
-    },
-    validateConnection: function(sourceView, sourceMagnet, targetView, targetMagnet) {
-        return sourceMagnet != targetMagnet;
-    }
+var $ = go.GraphObject.make;
+var myDiagram = $(go.Diagram, 'myDiagramDiv', {
+    initialContentAlignment: go.Spot.Left,
+    initialAutoScale: go.Diagram.UniformToFill,
+    layout: $(go.LayeredDigraphLayout, {
+        direction: 0
+    }),
+    'undoManager.isEnabled': true // enable Ctrl-Z to undo and Ctrl-Y to redo
 });
 
-var connect = function(source, sourcePort, target, targetPort) {
-    var link = new joint.shapes.devs.Link({
-        source: {
-            id: source.id,
-            selector: source.getPortSelector(sourcePort)
-        },
-        target: {
-            id: target.id,
-            selector: target.getPortSelector(targetPort)
-        }
+
+var makePort = function makePort(name, opts) {
+    var port = $(go.Shape, 'Rectangle', {
+        fill: 'gray',
+        stroke: null,
+        strokeWidth: 0,
+        desiredSize: new go.Size(8, 8),
+        portId: name, // declare this object to be a 'port'
+        toMaxLinks: 1, // don't allow more than one link into a port
+        cursor: 'pointer' // show a different cursor to indicate potential link point
     });
-    link.addTo(graph).reparent();
+    var lab = $(go.TextBlock, name, // the name of the port
+        {
+            font: '7pt sans-serif'
+        });
+    var panel = $(go.Panel, 'Horizontal', {
+        margin: new go.Margin(2, 0)
+    });
+    if (opts.isInPort) {
+        port.toSpot = go.Spot.Left;
+        port.toLinkable = true;
+        lab.margin = new go.Margin(1, 0, 0, 1);
+        panel.alignment = go.Spot.TopLeft;
+        panel.add(port);
+        panel.add(lab);
+    } else {
+        port.fromSpot = go.Spot.Right;
+        port.fromLinkable = true;
+        lab.margin = new go.Margin(1, 1, 0, 0);
+        panel.alignment = go.Spot.TopRight;
+        panel.add(lab);
+        panel.add(port);
+    }
+    return panel;
+};
+var makeTemplate = function makeTemplate(component, background, inPorts, outPorts) {
+    var node = $(go.Node, 'Spot',
+                $(go.Panel, 'Auto', {
+                        width: 100,
+                        height: 120
+                    },
+                    $(go.Shape, 'Rectangle', {
+                        fill: background,
+                        stroke: null,
+                        strokeWidth: 0,
+                        spot1: go.Spot.TopLeft,
+                        spot2: go.Spot.BottomRight
+                    }),
+                    $(go.Panel, 'Table',
+                        $(go.TextBlock, {
+                                row: 0,
+                                margin: 3,
+                                editable: true,
+                                maxSize: new go.Size(80, 40),
+                                stroke: 'white',
+                                font: 'bold 11pt sans-serif'
+                            },
+                            new go.Binding('text', 'name').makeTwoWay()),
+                        $(go.TextBlock, component, {
+                            row: 1,
+                            margin: 3,
+                            maxSize: new go.Size(80, NaN),
+                            stroke: 'white',
+                            font: 'italic 9pt sans-serif'
+                        })
+                    )
+                ),
+                $(go.Panel, 'Vertical', {
+                        alignment: go.Spot.Left,
+                        alignmentFocus: new go.Spot(0, 0.5, -8, 0)
+                    },
+                    inPorts)
+                    ,
+                $(go.Panel, 'Vertical', {
+                        alignment: go.Spot.Right,
+                        alignmentFocus: new go.Spot(1, 0.5, 8, 0)
+                    },
+                    outPorts)
+            );
+            myDiagram.nodeTemplateMap.add(component, node);
+};
+var makeComponentTemplate = function makeComponentTemplate(component) {
+    return getComponent(component)
+        .then(function(instance) {
+            var inPorts = _.map(_.keys(instance.inPorts.ports), _.curryRight(makePort, true));
+            var outPorts = _.map(_.keys(instance.outPorts.ports), _.curryRight(makePort, false));
+            makeTemplate(component, "cornflowerblue", inPorts, outPorts);
+        });
 };
 
-// var paper = new joint.dia.Paper({
-//     el: $('#paper'),
-//     width: 650,
-//     height: 800,
-//     gridSize: 1,
-//     model: graph
-// });
+// make template for data objects
+makeTemplate('Data', 'mediumpurple', [], [makePort('', false)]);
+
+myDiagram.linkTemplate = $(go.Link, {
+        routing: go.Link.Orthogonal,
+        corner: 5,
+        relinkableFrom: true,
+        relinkableTo: true
+    },
+    $(go.Shape, {
+        stroke: 'gray',
+        strokeWidth: 2
+    }),
+    $(go.Shape, {
+        stroke: 'gray',
+        fill: 'gray',
+        toArrow: 'Standard'
+    })
+);
 
 
-var link = new joint.dia.Link({
-    source: {
-        x: 10,
-        y: 20
-    },
-    target: {
-        x: 250,
-        y: 20
-    },
-    attrs: {}
-});
+var nfGraph = {
+    // graphQueues: [],
+    // processQueue: [],
+    // linkQueue: [],
+    // dataQueue: []
+    componentsQueue: []
+};
 
-link.attr({
-    '.connection': {
-        stroke: 'red'
-    },
-    '.marker-source': {
-        fill: 'red',
-        d: 'M 10 0 L 0 5 L 10 10 z'
-    },
-    '.marker-target': {
-        fill: 'yellow',
-        d: 'M 10 0 L 0 5 L 10 10 z'
+var myModel = {
+    "class": "go.GraphLinksModel",
+    "nodeCategoryProperty": "type",
+    "linkFromPortIdProperty": "frompid",
+    "linkToPortIdProperty": "topid",
+    "nodeDataArray": [],
+    "linkDataArray": []
+};
+
+var mapProcessToNodeData = function(process, processName) {
+    nfGraph.componentsQueue.push(process.component);
+    myModel.nodeDataArray.push({
+        key: processName,
+        type: process.component,
+        name: processName
+    });
+};
+
+var mapConnectionToLinkData = function(connection) {
+    if (connection.data) {
+        var dataKey = myModel.linkDataArray.length;
+        myModel.nodeDataArray.push({
+            key: dataKey,
+            type: 'Data',
+            name: connection.data
+        });
+        connection.src = {
+            process: dataKey
+        };
     }
-});
+    myModel.linkDataArray.push({
+        from: connection.src.process,
+        frompid: connection.src.port,
+        to: connection.tgt.process,
+        topid: connection.tgt.port
+    });
+};
 
-var link2 = new joint.dia.Link({
-    source: {
-        x: 10,
-        y: 60
-    },
-    target: {
-        x: 250,
-        y: 60
-    },
-    attrs: {}
-});
 
-link2.attr({
-    '.connection': {
-        stroke: '#E74C3C',
-        'stroke-width': 5
-    },
-    '.marker-source': {
-        stroke: '#E74C3C',
-        fill: '#E74C3C',
-        d: 'M 10 0 L 0 5 L 10 10 z'
-    },
-    '.marker-target': {
-        stroke: '#E74C3C',
-        fill: '#E74C3C',
-        d: 'M 10 0 L 0 5 L 10 10 z'
-    }
-});
-
-var link3 = new joint.dia.Link({
-    source: {
-        x: 10,
-        y: 100
-    },
-    target: {
-        x: 250,
-        y: 100
-    },
-    attrs: {}
-});
-
-link3.attr({
-    '.connection': {
-        stroke: '#3498DB',
-        'stroke-width': 3,
-        'stroke-dasharray': '5 2'
-    },
-    '.marker-source': {
-        stroke: '#3498DB',
-        fill: '#3498DB',
-        d: 'M5.5,15.499,15.8,21.447,15.8,15.846,25.5,21.447,25.5,9.552,15.8,15.152,15.8,9.552z'
-    },
-    '.marker-target': {
-        stroke: '#3498DB',
-        fill: '#3498DB',
-        d: 'M4.834,4.834L4.833,4.833c-5.889,5.892-5.89,15.443,0.001,21.334s15.44,5.888,21.33-0.002c5.891-5.891,5.893-15.44,0.002-21.33C20.275-1.056,10.725-1.056,4.834,4.834zM25.459,5.542c0.833,0.836,1.523,1.757,2.104,2.726l-4.08,4.08c-0.418-1.062-1.053-2.06-1.912-2.918c-0.859-0.859-1.857-1.494-2.92-1.913l4.08-4.08C23.7,4.018,24.622,4.709,25.459,5.542zM10.139,20.862c-2.958-2.968-2.959-7.758-0.001-10.725c2.966-2.957,7.756-2.957,10.725,0c2.954,2.965,2.955,7.757-0.001,10.724C17.896,23.819,13.104,23.817,10.139,20.862zM5.542,25.459c-0.833-0.837-1.524-1.759-2.105-2.728l4.081-4.081c0.418,1.063,1.055,2.06,1.914,2.919c0.858,0.859,1.855,1.494,2.917,1.913l-4.081,4.081C7.299,26.982,6.379,26.292,5.542,25.459zM8.268,3.435l4.082,4.082C11.288,7.935,10.29,8.571,9.43,9.43c-0.858,0.859-1.494,1.855-1.912,2.918L3.436,8.267c0.58-0.969,1.271-1.89,2.105-2.727C6.377,4.707,7.299,4.016,8.268,3.435zM22.732,27.563l-4.082-4.082c1.062-0.418,2.061-1.053,2.919-1.912c0.859-0.859,1.495-1.857,1.913-2.92l4.082,4.082c-0.58,0.969-1.271,1.891-2.105,2.728C24.623,26.292,23.701,26.983,22.732,27.563z'
-    }
-});
-
-var link4 = new joint.dia.Link({
-    source: {
-        x: 300,
-        y: 20
-    },
-    target: {
-        x: 540,
-        y: 20
-    },
-    vertices: [{
-        x: 300,
-        y: 60
-    }, {
-        x: 400,
-        y: 60
-    }, {
-        x: 400,
-        y: 20
-    }],
-    attrs: {}
-});
-
-link4.attr({
-    '.connection': {
-        stroke: 'black',
-        'stroke-width': 2
-    },
-    '.marker-source': {
-        stroke: 'black',
-        fill: 'black',
-        d: 'M5.5,15.499,15.8,21.447,15.8,15.846,25.5,21.447,25.5,9.552,15.8,15.152,15.8,9.552z'
-    },
-    '.marker-target': {
-        stroke: 'black',
-        fill: 'black',
-        d: 'M5.5,15.499,15.8,21.447,15.8,15.846,25.5,21.447,25.5,9.552,15.8,15.152,15.8,9.552z'
-    }
-});
-
-var link5 = new joint.dia.Link({
-    source: {
-        x: 340,
-        y: 80
-    },
-    target: {
-        x: 540,
-        y: 80
-    },
-    vertices: [{
-        x: 300,
-        y: 120
-    }, {
-        x: 400,
-        y: 80
-    }, {
-        x: 400,
-        y: 120
-    }],
-    smooth: true,
-    attrs: {}
-});
-
-link5.attr({
-    '.connection': {
-        stroke: '#9B59B6',
-        'stroke-width': 2
-    },
-    '.marker-source': {
-        stroke: '#9B59B6',
-        fill: '#9B59B6',
-        d: 'M24.316,5.318,9.833,13.682,9.833,5.5,5.5,5.5,5.5,25.5,9.833,25.5,9.833,17.318,24.316,25.682z'
-    },
-    '.marker-target': {
-        stroke: '#F39C12',
-        fill: '#F39C12',
-        d: 'M14.615,4.928c0.487-0.986,1.284-0.986,1.771,0l2.249,4.554c0.486,0.986,1.775,1.923,2.864,2.081l5.024,0.73c1.089,0.158,1.335,0.916,0.547,1.684l-3.636,3.544c-0.788,0.769-1.28,2.283-1.095,3.368l0.859,5.004c0.186,1.085-0.459,1.553-1.433,1.041l-4.495-2.363c-0.974-0.512-2.567-0.512-3.541,0l-4.495,2.363c-0.974,0.512-1.618,0.044-1.432-1.041l0.858-5.004c0.186-1.085-0.307-2.6-1.094-3.368L3.93,13.977c-0.788-0.768-0.542-1.525,0.547-1.684l5.026-0.73c1.088-0.158,2.377-1.095,2.864-2.081L14.615,4.928z'
-    }
-});
-
-graph.addCell(link).addCell(link2).addCell(link3).addCell(link4).addCell(link5);
-getComponentList()
-    .then(function function_name(componentList) {
-        window.Components = componentList;
-        console.table(window.Components);
-        _.each(window.Components, function(component) {
-            component.shape = new joint.shapes.devs.Atomic({
-                position: {
-                    x: 650,
-                    y: 150
-                },
-                size: {
-                    width: 200,
-                    height: 200
-                },
-                inPorts: _.keys(component.instance.inPorts.ports),
-                outPorts: _.keys(component.instance.outPorts.ports),
-                attrs: { text: { text: component.id } }
-            });
-            graph.addCell(component.shape);
-        })
+Promise.resolve('server/ShowContent3')
+    .then(getGraph)
+    .then(function function_name(myGraph) {
+        _.assign(nfGraph, myGraph);
+        _.each(nfGraph.processes, mapProcessToNodeData);
+        _.each(nfGraph.connections, mapConnectionToLinkData);
+        return nfGraph.componentsQueue;
+    })
+    .map(makeComponentTemplate)
+    .then(function() {
+        myDiagram.model = go.Model.fromJson(myModel);
+    })
+    .catch(function(err) {
+        if (err) {
+            console.warn(err);
+            throw err;
+        }
     });
